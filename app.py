@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from collections import Counter
 import pandas as pd
+import os
 
 # Configure page with professional styling
 st.set_page_config(
@@ -45,6 +46,49 @@ st.markdown("""
     .feature-card:hover {
         transform: translateY(-2px);
         box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    }
+    
+    .gesture-card {
+        background: white;
+        border: 2px solid #e9ecef;
+        border-radius: 15px;
+        padding: 1.5rem;
+        margin: 1rem;
+        text-align: center;
+        box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+    }
+    
+    .gesture-card:hover {
+        border-color: #667eea;
+        transform: translateY(-5px);
+        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
+    }
+    
+    .gesture-image {
+        border-radius: 10px;
+        border: 3px solid #f8f9fa;
+        margin-bottom: 1rem;
+    }
+    
+    .gesture-title {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #333;
+        margin-bottom: 0.5rem;
+    }
+    
+    .gesture-index {
+        background: #667eea;
+        color: white;
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        margin-bottom: 1rem;
     }
     
     .status-indicator {
@@ -85,6 +129,23 @@ st.markdown("""
         margin: 0.5rem 0;
         border-left: 4px solid #667eea;
     }
+    
+    .guide-header {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    
+    .category-section {
+        background: #f8f9fa;
+        border-radius: 15px;
+        padding: 2rem;
+        margin: 2rem 0;
+        border-left: 5px solid #667eea;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -120,14 +181,60 @@ labels_dict = {
 
 # Gesture categories for better organization
 gesture_categories = {
-    "👤 Personal": ['I', 'YOU'],
-    "❤️ Emotions": ['LOVE', 'HATE'],
-    "✅ Status": ['OK', 'NOT OK', 'WIN', 'SUPER'],
-    "🚀 Actions": ['HELP', 'STOP', 'COME', 'GO'],
-    "🙏 Courtesy": ['THANK YOU', 'SORRY', 'PLEASE', 'WELCOME'],
-    "💬 Responses": ['YES', 'NO'],
-    "👋 Greetings": ['GOOD MORNING', 'GOODBYE']
+    "👤 Personal": [0, 1],  # I, YOU
+    "❤️ Emotions": [2, 3],  # LOVE, HATE
+    "✅ Status": [4, 5, 6, 7],  # OK, NOT OK, WIN, SUPER
+    "🚀 Actions": [8, 9, 10, 11],  # HELP, STOP, COME, GO
+    "🙏 Courtesy": [12, 13, 16, 19],  # THANK YOU, SORRY, PLEASE, WELCOME
+    "💬 Responses": [14, 15],  # YES, NO
+    "👋 Greetings": [17, 18]  # GOOD MORNING, GOODBYE
 }
+
+# Gesture descriptions for better understanding
+gesture_descriptions = {
+    0: "Point to yourself with index finger",
+    1: "Point towards the person you're talking to",
+    2: "Cross hands over heart or make heart shape",
+    3: "Firm fist or aggressive gesture",
+    4: "Circle with thumb and index finger",
+    5: "Shake head or wave hand dismissively",
+    6: "Raise fist in victory pose",
+    7: "Thumbs up with emphasis",
+    8: "Open palm gesture, reaching out",
+    9: "Open hand raised like stop sign",
+    10: "Beckon with hand motion",
+    11: "Point away or wave goodbye motion",
+    12: "Hands together in prayer position",
+    13: "Hand over heart with apologetic expression",
+    14: "Nod or thumbs up gesture",
+    15: "Shake head or wave hand",
+    16: "Hands together in pleading position",
+    17: "Wave hello with cheerful expression",
+    18: "Wave farewell gesture",
+    19: "Open arms in welcoming gesture"
+}
+
+# Function to check if gesture image exists
+def check_gesture_image(gesture_index):
+    """Check if gesture image exists in the images folder"""
+    image_path = f"images/{gesture_index}.jpg"
+    return os.path.exists(image_path)
+
+# Function to load gesture image
+def load_gesture_image(gesture_index):
+    """Load gesture image from images folder"""
+    image_path = f"images/{gesture_index}.jpg"
+    try:
+        if os.path.exists(image_path):
+            return Image.open(image_path)
+        else:
+            # Create placeholder image if not found
+            placeholder = Image.new('RGB', (200, 200), color='lightgray')
+            return placeholder
+    except Exception as e:
+        # Return placeholder on error
+        placeholder = Image.new('RGB', (200, 200), color='lightgray')
+        return placeholder
 
 # Initialize enhanced session state
 def init_session_state():
@@ -376,7 +483,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h1>🤟 AI-Powered Sign Language Recognition System</h1>
-        <p>Professional-grade gesture detection with advanced confidence analysis and real-time insights</p>
+        <p>Professional-grade gesture detection with advanced confidence analysis and visual learning guide</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -441,17 +548,6 @@ def main():
         session_duration = datetime.now() - stats['session_start']
         st.metric("Session Duration", f"{session_duration.seconds // 60}m {session_duration.seconds % 60}s")
         
-        # Gesture reference with categories
-        st.markdown("#### 🔤 Gesture Library")
-        for category, gestures in gesture_categories.items():
-            with st.expander(f"{category} ({len(gestures)} gestures)"):
-                for gesture in gestures:
-                    count = stats['gesture_counts'].get(gesture, 0)
-                    if count > 0:
-                        st.write(f"• **{gesture}** _{count}x detected_")
-                    else:
-                        st.write(f"• {gesture}")
-        
         # Control buttons
         st.markdown("#### 🎮 System Controls")
         if st.button("🗑️ Reset Session", type="secondary"):
@@ -462,10 +558,11 @@ def main():
             st.success("Session reset successfully!")
             st.rerun()
 
-    # Main interface with tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    # Main interface with enhanced tabs including gesture guide
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📸 Live Detection", 
         "📁 Image Upload", 
+        "📖 Gesture Guide",
         "📈 Analytics Dashboard",
         "ℹ️ System Information"
     ])
@@ -613,6 +710,124 @@ def main():
                     st.info("No gesture detected in the uploaded image. Try with better lighting or clearer hand positioning.")
     
     with tab3:
+        st.markdown("""
+        <div class="guide-header">
+            <h2>📖 Complete Gesture Learning Guide</h2>
+            <p>Visual reference for all 20 supported sign language gestures</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Instructions for image setup
+        st.info("""
+        **📁 Image Setup Instructions:**
+        1. Create a folder named `images` in your project root directory
+        2. Add gesture images named `0.jpg`, `1.jpg`, `2.jpg`, ..., `19.jpg`
+        3. Each image should clearly show the corresponding gesture
+        4. Images will be automatically loaded and displayed below
+        """)
+        
+        # Check if images folder exists
+        if not os.path.exists("images"):
+            st.warning("⚠️ Images folder not found. Please create an 'images' folder and add gesture photos.")
+            st.markdown("**Expected folder structure:**")
+            st.code("""
+project-root/
+├── app.py
+├── model.p
+├── images/
+│   ├── 0.jpg    # Gesture for 'I'
+│   ├── 1.jpg    # Gesture for 'YOU'
+│   ├── 2.jpg    # Gesture for 'LOVE'
+│   └── ...      # Continue for all 20 gestures
+└── requirements.txt
+            """)
+        
+        # Display gestures by category
+        for category_name, gesture_indices in gesture_categories.items():
+            st.markdown(f"""
+            <div class="category-section">
+                <h3>{category_name}</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Create columns for gestures in this category
+            cols = st.columns(min(len(gesture_indices), 4))
+            
+            for idx, gesture_idx in enumerate(gesture_indices):
+                with cols[idx % 4]:
+                    gesture_name = labels_dict[gesture_idx]
+                    gesture_desc = gesture_descriptions.get(gesture_idx, "Gesture description")
+                    
+                    # Create gesture card
+                    st.markdown(f"""
+                    <div class="gesture-card">
+                        <div class="gesture-index">{gesture_idx}</div>
+                        <div class="gesture-title">{gesture_name}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Load and display gesture image
+                    gesture_image = load_gesture_image(gesture_idx)
+                    
+                    if check_gesture_image(gesture_idx):
+                        st.image(gesture_image, use_column_width=True, caption=f"Gesture: {gesture_name}")
+                        st.success("✅ Image loaded")
+                    else:
+                        st.image(gesture_image, use_column_width=True, caption="Placeholder - Add image")
+                        st.warning(f"⚠️ Add {gesture_idx}.jpg to images folder")
+                    
+                    # Gesture description
+                    st.markdown(f"**Description:** {gesture_desc}")
+                    
+                    # Usage statistics
+                    count = stats['gesture_counts'].get(gesture_name, 0)
+                    if count > 0:
+                        st.info(f"📊 Detected {count} times in this session")
+                    
+                    st.markdown("---")
+        
+        # Quick reference table
+        st.markdown("### 📋 Quick Reference Table")
+        
+        # Create a comprehensive reference table
+        reference_data = []
+        for idx in range(20):
+            gesture_name = labels_dict[idx]
+            category = None
+            for cat_name, indices in gesture_categories.items():
+                if idx in indices:
+                    category = cat_name
+                    break
+            
+            image_status = "✅ Available" if check_gesture_image(idx) else "❌ Missing"
+            usage_count = stats['gesture_counts'].get(gesture_name, 0)
+            
+            reference_data.append({
+                "Index": idx,
+                "Gesture": gesture_name,
+                "Category": category,
+                "Description": gesture_descriptions.get(idx, "")[:50] + "...",
+                "Image Status": image_status,
+                "Usage Count": usage_count
+            })
+        
+        # Display as dataframe
+        df = pd.DataFrame(reference_data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        # Download template
+        st.markdown("### 📥 Download Setup Guide")
+        
+        if st.button("📋 Generate Image List Template"):
+            template_text = "# Gesture Images Checklist\n\n"
+            for idx in range(20):
+                gesture_name = labels_dict[idx]
+                template_text += f"□ {idx}.jpg - {gesture_name}\n"
+            
+            st.text_area("Copy this checklist:", template_text, height=300)
+            st.info("Save this as a checklist and add corresponding images to your 'images' folder.")
+    
+    with tab4:
         st.markdown("### 📈 Advanced Analytics Dashboard")
         
         if st.session_state.session_stats['total_detections'] > 0:
@@ -662,14 +877,14 @@ def main():
         else:
             st.info("📊 Start detecting gestures to see analytics data here!")
     
-    with tab4:
+    with tab5:
         st.markdown("### ℹ️ System Information")
         
         st.markdown("""
         #### 🚀 Advanced AI Sign Language Recognition System
         
-        This professional-grade system provides comprehensive gesture recognition with detailed confidence analysis
-        and real-time performance monitoring.
+        This professional-grade system provides comprehensive gesture recognition with detailed confidence analysis,
+        real-time performance monitoring, and an interactive learning guide.
         
         ##### 🔧 Technical Specifications
         
@@ -687,6 +902,7 @@ def main():
         
         **Enhanced Features:**
         - ✅ **Real-time confidence scoring** with visual indicators
+        - ✅ **Interactive gesture guide** with visual learning aids
         - ✅ **Advanced analytics dashboard** with trend analysis
         - ✅ **Professional UI/UX** with responsive design
         - ✅ **Session management** with detailed statistics
@@ -694,6 +910,7 @@ def main():
         - ✅ **Multi-hand detection** with individual analysis
         - ✅ **Confidence-based color coding** for immediate feedback
         - ✅ **Performance monitoring** with processing time tracking
+        - ✅ **Visual learning guide** with gesture demonstrations
         """)
         
         # System performance indicators
@@ -723,6 +940,7 @@ def main():
             - Multi-hand support: ✅
             - Confidence analysis: ✅
             - Analytics dashboard: ✅
+            - Visual learning guide: ✅
             """)
 
 if __name__ == "__main__":
