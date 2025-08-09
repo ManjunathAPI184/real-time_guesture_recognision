@@ -3,18 +3,19 @@ import pickle
 import cv2
 import mediapipe as mp
 import numpy as np
-import av
-import asyncio
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+from PIL import Image
+import base64
+import io
+import time
+import threading
+from queue import Queue
 
-# Enhanced RTC Configuration for better connectivity
-RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]},
-    ]
-})
+# Configure page
+st.set_page_config(
+    page_title="Real-Time Gesture Recognition",
+    page_icon="🤟",
+    layout="wide"
+)
 
 # Load model
 @st.cache_resource
@@ -42,236 +43,250 @@ labels_dict = {
     17: 'GOOD MORNING', 18: 'GOODBYE', 19: 'WELCOME'
 }
 
-class RealTimeGestureTransformer(VideoTransformerBase):
-    def __init__(self):
-        self.model = load_model()
-        self.mp_hands, self.mp_drawing, self.mp_drawing_styles = init_mediapipe()
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False,  # Important: False for video
+def process_frame_data(frame_data, model, mp_hands, mp_drawing, mp_drawing_styles):
+    """Process base64 frame data from JavaScript"""
+    try:
+        # Decode base64 image
+        header, encoded = frame_data.split(',', 1)
+        image_data = base64.b64decode(encoded)
+        image = Image.open(io.BytesIO(image_data))
+        
+        # Convert to OpenCV format
+        frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        # Initialize hands detector
+        hands = mp_hands.Hands(
+            static_image_mode=False,
             max_num_hands=2,
             min_detection_confidence=0.7,
             min_tracking_confidence=0.5
         )
-        self.current_prediction = "Ready for gestures..."
-        self.frame_count = 0
-        self.prediction_history = []
         
-    def recv(self, frame):
-        """Process each frame in real-time"""
-        try:
-            self.frame_count += 1
-            img = frame.to_ndarray(format="bgr24")
-            
-            # Convert BGR to RGB for MediaPipe
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            results = self.hands.process(img_rgb)
-            
-            # Add frame info overlay
-            cv2.putText(img, f"Frame: {self.frame_count}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            current_predictions = []
-            
-            if results.multi_hand_landmarks:
-                for hand_landmarks in results.multi_hand_landmarks:
-                    data_aux = []
-                    x_ = []
-                    y_ = []
-                    H, W, _ = img.shape
+        # Process frame
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = hands.process(frame_rgb)
+        
+        predictions = []
+        
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                data_aux = []
+                x_ = []
+                y_ = []
+                H, W, _ = frame.shape
 
-                    # Extract landmark coordinates
-                    for landmark in hand_landmarks.landmark:
-                        x_.append(landmark.x)
-                        y_.append(landmark.y)
+                # Extract landmarks
+                for landmark in hand_landmarks.landmark:
+                    x_.append(landmark.x)
+                    y_.append(landmark.y)
 
-                    # Normalize coordinates
-                    for landmark in hand_landmarks.landmark:
-                        data_aux.append(landmark.x - min(x_))
-                        data_aux.append(landmark.y - min(y_))
+                # Normalize
+                for landmark in hand_landmarks.landmark:
+                    data_aux.append(landmark.x - min(x_))
+                    data_aux.append(landmark.y - min(y_))
 
-                    # Make prediction
-                    if self.model and len(data_aux) == 42:
-                        try:
-                            prediction = self.model.predict([np.asarray(data_aux)])
-                            predicted_character = labels_dict.get(int(prediction[0]), "Unknown")
-                            current_predictions.append(predicted_character)
-                            
-                            # Draw bounding box
-                            x1 = int(min(x_) * W) - 10
-                            y1 = int(min(y_) * H) - 10
-                            x2 = int(max(x_) * W) + 10
-                            y2 = int(max(y_) * H) + 10
-                            
-                            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                            cv2.putText(img, predicted_character, (x1, y1 - 10), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-                            
-                        except Exception as e:
-                            cv2.putText(img, "Prediction Error", (10, 60), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                # Predict
+                if model and len(data_aux) == 42:
+                    try:
+                        prediction = model.predict([np.asarray(data_aux)])
+                        predicted_character = labels_dict.get(int(prediction[0]), "Unknown")
+                        predictions.append(predicted_character)
+                        
+                        # Draw on frame
+                        x1 = int(min(x_) * W) - 10
+                        y1 = int(min(y_) * H) - 10
+                        x2 = int(max(x_) * W) + 10
+                        y2 = int(max(y_) * H) + 10
+                        
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                        cv2.putText(frame, predicted_character, (x1, y1 - 10), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+                    except Exception as e:
+                        pass
 
-                    # Draw hand landmarks
-                    self.mp_drawing.draw_landmarks(
-                        img, hand_landmarks, self.mp_hands.HAND_CONNECTIONS,
-                        self.mp_drawing_styles.get_default_hand_landmarks_style(),
-                        self.mp_drawing_styles.get_default_hand_connections_style()
-                    )
-            
-            # Update prediction with smoothing
-            if current_predictions:
-                self.prediction_history.append(current_predictions[0])
-                if len(self.prediction_history) > 10:
-                    self.prediction_history = self.prediction_history[-10:]
-                
-                # Most common prediction in recent frames
-                from collections import Counter
-                most_common = Counter(self.prediction_history).most_common(1)
-                self.current_prediction = most_common[0][0] if most_common else "Processing..."
-            else:
-                self.current_prediction = "No hands detected"
-            
-            # Display current prediction on frame
-            cv2.putText(img, f"Current: {self.current_prediction}", (10, img.shape[0] - 20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-            
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
-            
-        except Exception as e:
-            # Return error frame
-            error_img = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(error_img, f"Error: {str(e)[:50]}", (10, 240), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            return av.VideoFrame.from_ndarray(error_img, format="bgr24")
+                # Draw landmarks
+                mp_drawing.draw_landmarks(
+                    frame, hand_landmarks, mp_hands.HAND_CONNECTIONS,
+                    mp_drawing_styles.get_default_hand_landmarks_style(),
+                    mp_drawing_styles.get_default_hand_connections_style()
+                )
+        
+        # Convert back to RGB
+        processed_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        return processed_rgb, predictions
+        
+    except Exception as e:
+        st.error(f"Frame processing error: {str(e)}")
+        return None, []
 
 def main():
-    st.set_page_config(
-        page_title="Real-Time Gesture Recognition",
-        page_icon="🤟",
-        layout="wide"
-    )
+    st.title("🎥 Real-Time Gesture Recognition (Native Camera)")
+    st.markdown("**Using browser's native camera API for real-time processing**")
     
-    st.title("🎥 Real-Time Sign Language Recognition")
-    st.markdown("**True real-time camera feed processing with live gesture detection**")
-    
-    # Check model availability
+    # Load model
     model = load_model()
     if not model:
-        st.error("Cannot start without model file")
+        st.error("Cannot start without model")
         return
     
-    # Configuration sidebar
-    with st.sidebar:
-        st.header("⚙️ Real-Time Controls")
-        
-        # WebRTC status
-        st.subheader("📡 Connection Status")
-        st.info("WebRTC streaming for real-time processing")
-        
-        # Performance settings
-        st.subheader("🔧 Performance")
-        quality = st.selectbox(
-            "Video Quality",
-            ["Low (320x240)", "Medium (640x480)", "High (1280x720)"],
-            index=1
-        )
-        
-        # Map quality to dimensions
-        quality_map = {
-            "Low (320x240)": (320, 240),
-            "Medium (640x480)": (640, 480), 
-            "High (1280x720)": (1280, 720)
-        }
-        width, height = quality_map[quality]
-        
-        # Gesture reference
-        st.subheader("🔤 Supported Gestures")
-        gesture_categories = {
-            "Basic": ['I', 'YOU', 'OK', 'YES', 'NO'],
-            "Actions": ['HELP', 'STOP', 'COME', 'GO'],
-            "Courtesy": ['THANK YOU', 'SORRY', 'PLEASE']
-        }
-        
-        for category, gestures in gesture_categories.items():
-            with st.expander(f"{category}"):
-                for gesture in gestures:
-                    st.write(f"• {gesture}")
+    mp_hands, mp_drawing, mp_drawing_styles = init_mediapipe()
     
-    # Main real-time video area
+    # Initialize session state
+    if 'live_predictions' not in st.session_state:
+        st.session_state.live_predictions = []
+    if 'frame_count' not in st.session_state:
+        st.session_state.frame_count = 0
+    
+    # Layout
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        st.subheader("🎥 Live Camera Feed")
+        st.subheader("📹 Live Camera Feed")
         
-        # Real-time WebRTC streamer
-        ctx = webrtc_streamer(
-            key="real-time-gesture-recognition",
-            video_transformer_factory=RealTimeGestureTransformer,
-            rtc_configuration=RTC_CONFIGURATION,
-            media_stream_constraints={
-                "video": {
-                    "width": {"exact": width},
-                    "height": {"exact": height},
-                    "frameRate": {"min": 15, "ideal": 30, "max": 30}
-                },
-                "audio": False
-            },
-            async_processing=True,
-            video_html_attrs={
-                "style": {
-                    "width": "100%",
-                    "border": "3px solid #00ff00",
-                    "border-radius": "10px",
-                    "box-shadow": "0 4px 8px rgba(0,0,0,0.1)"
-                }
+        # Native camera component
+        camera_html = """
+        <div id="camera-container">
+            <video id="video" width="640" height="480" autoplay muted playsinline></video>
+            <canvas id="overlay" width="640" height="480" style="position: absolute; border: 2px solid #00ff00;"></canvas>
+            <div id="controls" style="margin-top: 10px;">
+                <button onclick="startCamera()" style="background: #4CAF50; color: white; border: none; padding: 10px 20px; margin: 5px; border-radius: 5px;">Start Camera</button>
+                <button onclick="toggleProcessing()" style="background: #2196F3; color: white; border: none; padding: 10px 20px; margin: 5px; border-radius: 5px;">Start Live Processing</button>
+            </div>
+            <div id="status" style="margin-top: 10px; font-weight: bold;">Camera Status: Ready</div>
+            <div id="prediction" style="margin-top: 5px; font-size: 18px; color: #00ff00;">Prediction: None</div>
+        </div>
+
+        <script>
+        let video = document.getElementById('video');
+        let overlay = document.getElementById('overlay');
+        let ctx = overlay.getContext('2d');
+        let stream = null;
+        let isProcessing = false;
+        let processingInterval = null;
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 },
+                        facingMode: 'user'
+                    }
+                });
+                video.srcObject = stream;
+                document.getElementById('status').innerText = 'Camera Status: Active';
+            } catch (err) {
+                console.error('Camera error:', err);
+                document.getElementById('status').innerText = 'Camera Status: Error - ' + err.message;
             }
-        )
+        }
+
+        function captureAndProcess() {
+            if (video.videoWidth === 0) return;
+            
+            // Create temporary canvas for capture
+            let canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 480;
+            let tempCtx = canvas.getContext('2d');
+            
+            // Draw current video frame
+            tempCtx.drawImage(video, 0, 0, 640, 480);
+            let imageData = canvas.toDataURL('image/jpeg', 0.8);
+            
+            // Send to Streamlit for processing
+            fetch('/process_frame', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    frame_data: imageData
+                })
+            }).then(response => response.json())
+              .then(data => {
+                  if (data.predictions && data.predictions.length > 0) {
+                      document.getElementById('prediction').innerText = 'Prediction: ' + data.predictions.join(', ');
+                      document.getElementById('prediction').style.color = '#00ff00';
+                  } else {
+                      document.getElementById('prediction').innerText = 'Prediction: No gesture detected';
+                      document.getElementById('prediction').style.color = '#ffaa00';
+                  }
+              }).catch(err => {
+                  console.error('Processing error:', err);
+              });
+        }
+
+        function toggleProcessing() {
+            isProcessing = !isProcessing;
+            
+            if (isProcessing) {
+                processingInterval = setInterval(captureAndProcess, 200); // 5 FPS processing
+                document.getElementById('status').innerText = 'Camera Status: Live Processing Active';
+            } else {
+                clearInterval(processingInterval);
+                document.getElementById('status').innerText = 'Camera Status: Active';
+            }
+        }
+
+        // Auto-start camera
+        window.addEventListener('load', function() {
+            setTimeout(startCamera, 1000);
+        });
+        </script>
+
+        <style>
+        #camera-container {
+            position: relative;
+            display: inline-block;
+            text-align: center;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        </style>
+        """
         
-        # Real-time status
-        if ctx.video_transformer:
-            st.success("✅ Real-time processing active")
-        else:
-            st.warning("⏳ Initializing real-time stream...")
+        st.components.v1.html(camera_html, height=600)
     
     with col2:
         st.subheader("📊 Live Status")
         
-        # Real-time prediction display
-        prediction_placeholder = st.empty()
-        status_placeholder = st.empty()
+        # Live prediction display
+        if st.session_state.live_predictions:
+            latest_prediction = st.session_state.live_predictions[-1]
+            st.success(f"**Latest:** {latest_prediction}")
+        else:
+            st.info("**Status:** Waiting for gestures...")
         
-        # Update display in real-time
-        if ctx.video_transformer:
-            current_pred = getattr(ctx.video_transformer, 'current_prediction', 'Initializing...')
-            frame_count = getattr(ctx.video_transformer, 'frame_count', 0)
-            
-            if current_pred and current_pred != "No hands detected":
-                prediction_placeholder.success(f"**🎯 Detected:** {current_pred}")
-            else:
-                prediction_placeholder.info(f"**📱 Status:** {current_pred}")
-            
-            status_placeholder.metric("Frames Processed", frame_count)
+        # Statistics
+        st.metric("Frames Processed", st.session_state.frame_count)
+        
+        # Recent predictions
+        if len(st.session_state.live_predictions) > 1:
+            st.subheader("🕒 Recent Detections")
+            for i, pred in enumerate(st.session_state.live_predictions[-5:]):
+                st.write(f"{i+1}. {pred}")
         
         # Instructions
-        st.subheader("💡 Tips")
+        st.subheader("💡 Instructions")
         st.write("""
-        **For best real-time results:**
+        **Steps:**
+        1. Click "Start Camera"
+        2. Allow camera permissions
+        3. Click "Start Live Processing"
+        4. Show gestures to camera
         
-        🔆 **Good lighting** on hands
-        
-        📱 **Hold steady** for 2-3 seconds
-        
-        🎯 **Clear gestures** work best
-        
-        🖐️ **One hand** at a time initially
-        
-        📏 **Appropriate distance** from camera
+        **Tips:**
+        • Good lighting helps
+        • Keep hands steady
+        • One gesture at a time
+        • Stay in camera frame
         """)
-        
-        # Performance info
-        st.subheader("⚡ Performance")
-        st.write(f"**Resolution:** {width}x{height}")
-        st.write(f"**Target FPS:** 30")
-        st.write(f"**Processing:** Real-time")
 
 if __name__ == "__main__":
     main()
