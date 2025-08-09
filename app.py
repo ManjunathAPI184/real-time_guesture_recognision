@@ -1,12 +1,21 @@
-import av
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+import cv2
+import numpy as np
 
-class VideoTransformer(VideoTransformerBase):
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        # Do your processing here
-        return img
+st.title("Live Webcam Feed in Streamlit Cloud")
 
-st.title("Live Webcam with Streamlit Cloud")
-webrtc_streamer(key="example", video_transformer_factory=VideoTransformer)
+# Capture image from webcam via browser
+img_file = st.camera_input("Take a photo or live snapshot")
+
+if img_file is not None:
+    # Convert the image to OpenCV format
+    bytes_data = img_file.getvalue()
+    img_array = np.frombuffer(bytes_data, np.uint8)
+    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+    # Process the frame if needed
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Show the frame
+    st.image(frame, channels="BGR")
+    st.image(gray, channels="GRAY")
