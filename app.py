@@ -14,19 +14,19 @@ st.set_page_config(
     layout="wide"
 )
 
-# WebRTC configuration for better connectivity
+# WebRTC configuration
 RTC_CONFIGURATION = RTCConfiguration({
     "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
 })
 
-# Load the trained model
+# Load model
 @st.cache_resource
 def load_model():
     try:
         model_dict = pickle.load(open('./model.p', 'rb'))
         return model_dict['model']
     except FileNotFoundError:
-        st.error("Model file 'model.p' not found. Please ensure the model file is in the same directory.")
+        st.error("Model file 'model.p' not found.")
         return None
 
 # Initialize MediaPipe
@@ -49,38 +49,30 @@ class VideoTransformer(VideoTransformerBase):
     def __init__(self):
         self.model = load_model()
         self.mp_hands, self.mp_drawing, self.mp_drawing_styles = init_mediapipe()
-        self.hands = None
-        self.confidence = 0.3
+        self.hands = self.mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.3,
+            min_tracking_confidence=0.5
+        )
         self.current_prediction = "No gesture detected"
-        
+
     def update_confidence(self, confidence):
-        self.confidence = confidence
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=2,
             min_detection_confidence=confidence,
             min_tracking_confidence=0.5
         )
-    
-    def transform(self, frame):
+
+    def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        
-        # Initialize hands if not done
-        if self.hands is None:
-            self.hands = self.mp_hands.Hands(
-                static_image_mode=False,
-                max_num_hands=2,
-                min_detection_confidence=self.confidence,
-                min_tracking_confidence=0.5
-            )
-        
-        # Process the frame
+
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = self.hands.process(img_rgb)
-        
-        # Reset prediction
+
         self.current_prediction = "No gesture detected"
-        
+
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
                 data_aux = []
@@ -88,313 +80,57 @@ class VideoTransformer(VideoTransformerBase):
                 y_ = []
                 H, W, _ = img.shape
 
-                # Extract landmark coordinates
-                for i in range(len(hand_landmarks.landmark)):
-                    x = hand_landmarks.landmark[i].x
-                    y = hand_landmarks.landmark[i].y
-                    x_.append(x)
-                    y_.append(y)
+                for lm in hand_landmarks.landmark:
+                    x_.append(lm.x)
+                    y_.append(lm.y)
 
-                # Normalize coordinates
-                for i in range(len(hand_landmarks.landmark)):
-                    x = hand_landmarks.landmark[i].x
-                    y = hand_landmarks.landmark[i].y
-                    data_aux.append(x - min(x_))
-                    data_aux.append(y - min(y_))
+                for lm in hand_landmarks.landmark:
+                    data_aux.append(lm.x - min(x_))
+                    data_aux.append(lm.y - min(y_))
 
-                # Bounding box coordinates
                 x1 = int(min(x_) * W) - 10
                 y1 = int(min(y_) * H) - 10
                 x2 = int(max(x_) * W) + 10
                 y2 = int(max(y_) * H) + 10
 
-                # Make prediction
                 if self.model and len(data_aux) == 42:
                     try:
                         prediction = self.model.predict([np.asarray(data_aux)])
                         predicted_character = labels_dict.get(int(prediction[0]), "Unknown")
                         self.current_prediction = predicted_character
-                        
-                        # Draw bounding box and text
+
                         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 4)
-                        cv2.putText(img, predicted_character, (x1, y1 - 10), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 0), 3, cv2.LINE_AA)
+                        cv2.putText(img, predicted_character, (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 0), 3, cv2.LINE_AA)
                     except Exception as e:
                         self.current_prediction = f"Error: {str(e)[:20]}..."
 
-                # Draw hand landmarks
                 self.mp_drawing.draw_landmarks(
                     img, hand_landmarks, self.mp_hands.HAND_CONNECTIONS,
                     self.mp_drawing_styles.get_default_hand_landmarks_style(),
                     self.mp_drawing_styles.get_default_hand_connections_style()
                 )
-        
+
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 def main():
-    st.title("🤟 Real-Time Sign Language Recognition System")
-    st.markdown("---")
-    
-    # Load model
-    model = load_model()
-    if model is None:
-        st.error("Failed to load model. Please check if model.p exists.")
-        return
-    
-    # Sidebar configuration
-    st.sidebar.header("⚙️ Configuration")
+    st.title("🤟 Real-Time Sign Language Recognition")
+
     detection_confidence = st.sidebar.slider(
-        "Detection Confidence", 
-        0.1, 1.0, 0.3, 0.1,
-        help="Higher values require more confident detections"
+        "Detection Confidence", 0.1, 1.0, 0.3, 0.1
     )
-    
-    # Display available gestures
-    st.sidebar.subheader("🔤 Available Gestures")
-    col1, col2 = st.sidebar.columns(2)
-    gestures_list = list(labels_dict.values())
-    mid = len(gestures_list) // 2
-    
-    with col1:
-        for gesture in gestures_list[:mid]:
-            st.sidebar.write(f"• {gesture}")
-    
-    with col2:
-        for gesture in gestures_list[mid:]:
-            st.sidebar.write(f"• {gesture}")
-    
-    # Main content tabs
-    tab1, tab2, tab3 = st.tabs(["🎥 Real-Time Detection", "📁 Upload Image", "ℹ️ About"])
-    
-    with tab1:
-        st.subheader("Real-Time Sign Language Detection")
-        st.write("Real-time gesture recognition using your webcam through WebRTC streaming.")
-        
-        # Instructions
-        st.info("""
-        **Instructions:**
-        1. Click 'START' to begin real-time detection
-        2. Allow camera permissions when prompted
-        3. Show clear hand gestures to the camera
-        4. The prediction will appear above your hand in real-time
-        5. Adjust detection confidence in the sidebar if needed
-        """)
-        
-        # Create columns for layout
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            # WebRTC streamer
-            ctx = webrtc_streamer(
-                key="sign-language-detection",
-                video_transformer_factory=VideoTransformer,
-                rtc_configuration=RTC_CONFIGURATION,
-                media_stream_constraints={
-                    "video": {"width": 640, "height": 480},
-                    "audio": False
-                },
-                async_processing=True,
-                video_html_attrs={
-                    "style": {"width": "100%", "margin": "0 auto", "border": "2px solid #1f77b4"}
-                }
-            )
-            
-            # Update confidence in real-time
-            if ctx.video_transformer:
-                ctx.video_transformer.update_confidence(detection_confidence)
-        
-        with col2:
-            st.subheader("📊 Current Status")
-            
-            # Real-time prediction display
-            if ctx.video_transformer:
-                prediction_placeholder = st.empty()
-                
-                # Update prediction display
-                if hasattr(ctx.video_transformer, 'current_prediction'):
-                    current_pred = ctx.video_transformer.current_prediction
-                    if current_pred != "No gesture detected":
-                        prediction_placeholder.success(f"**Detected:** {current_pred}")
-                    else:
-                        prediction_placeholder.info("**Status:** Ready for gesture detection")
-                else:
-                    prediction_placeholder.info("**Status:** Initializing...")
-            
-            # Performance tips
-            st.subheader("💡 Tips for Better Results")
-            st.write("""
-            **Optimize Performance:**
-            • Good lighting on hands
-            • Plain background
-            • Clear hand positioning
-            • Stable hand movements
-            • Proper camera distance
-            
-            **Troubleshooting:**
-            • Refresh if video freezes
-            • Check camera permissions
-            • Try different confidence levels
-            • Ensure stable internet connection
-            """)
-    
-    with tab2:
-        st.subheader("Upload Image for Sign Detection")
-        st.write("Upload an image containing sign language gestures for detection.")
-        
-        uploaded_file = st.file_uploader("Choose an image...", type=['jpg', 'jpeg', 'png'])
-        
-        if uploaded_file is not None:
-            # Initialize MediaPipe for static image
-            mp_hands, mp_drawing, mp_drawing_styles = init_mediapipe()
-            hands = mp_hands.Hands(static_image_mode=True, min_detection_confidence=detection_confidence)
-            
-            # Read and display original image
-            image = Image.open(uploaded_file)
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("Original Image")
-                st.image(image, use_column_width=True)
-            
-            # Convert PIL to OpenCV format
-            frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-            
-            # Process the image (using similar logic as real-time processing)
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = hands.process(frame_rgb)
-            
-            predictions = []
-            
-            if results.multi_hand_landmarks:
-                for hand_landmarks in results.multi_hand_landmarks:
-                    data_aux = []
-                    x_ = []
-                    y_ = []
-                    H, W, _ = frame.shape
 
-                    # Extract and normalize coordinates
-                    for i in range(len(hand_landmarks.landmark)):
-                        x = hand_landmarks.landmark[i].x
-                        y = hand_landmarks.landmark[i].y
-                        x_.append(x)
-                        y_.append(y)
+    ctx = webrtc_streamer(
+        key="sign-language-detection",
+        video_transformer_factory=VideoTransformer,
+        rtc_configuration=RTC_CONFIGURATION,
+        media_stream_constraints={"video": True, "audio": False},
+        video_html_attrs={"style": {"width": "100%", "margin": "0 auto"}}
+    )
 
-                    for i in range(len(hand_landmarks.landmark)):
-                        x = hand_landmarks.landmark[i].x
-                        y = hand_landmarks.landmark[i].y
-                        data_aux.append(x - min(x_))
-                        data_aux.append(y - min(y_))
-
-                    # Bounding box
-                    x1 = int(min(x_) * W) - 10
-                    y1 = int(min(y_) * H) - 10
-                    x2 = int(max(x_) * W) + 10
-                    y2 = int(max(y_) * H) + 10
-
-                    # Predict
-                    if model and len(data_aux) == 42:
-                        try:
-                            prediction = model.predict([np.asarray(data_aux)])
-                            predicted_character = labels_dict.get(int(prediction[0]), "Unknown")
-                            predictions.append(predicted_character)
-                            
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 4)
-                            cv2.putText(frame, predicted_character, (x1, y1 - 10), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 0), 3, cv2.LINE_AA)
-                        except Exception as e:
-                            st.error(f"Prediction error: {str(e)}")
-
-                    # Draw landmarks
-                    mp_drawing.draw_landmarks(
-                        frame, hand_landmarks, mp_hands.HAND_CONNECTIONS,
-                        mp_drawing_styles.get_default_hand_landmarks_style(),
-                        mp_drawing_styles.get_default_hand_connections_style()
-                    )
-            
-            # Convert back to RGB for display
-            processed_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            with col2:
-                st.subheader("Processed Image")
-                st.image(processed_rgb, use_column_width=True)
-                
-                if predictions:
-                    st.success(f"**Detected Gestures:** {', '.join(predictions)}")
-                else:
-                    st.warning("No hand gestures detected. Try adjusting the detection confidence.")
-    
-    with tab3:
-        st.subheader("About This Real-Time Application")
-        st.write("""
-        This enhanced Sign Language Recognition System provides **real-time video streaming** 
-        and gesture detection using advanced web technologies.
-        
-        ## 🚀 Key Features
-        
-        **Real-Time Processing:**
-        - Live webcam streaming via WebRTC
-        - Instantaneous gesture recognition
-        - Real-time prediction display
-        - Adjustable detection parameters
-        
-        **Advanced Technology Stack:**
-        - **Streamlit + WebRTC:** Real-time video streaming
-        - **MediaPipe:** Google's hand landmark detection  
-        - **OpenCV:** Advanced computer vision processing
-        - **Scikit-learn:** Machine learning classification
-        - **WebRTC Protocol:** Low-latency video streaming
-        
-        ## 🎯 Performance Advantages
-        
-        **Real-Time Capabilities:**
-        - Frame-by-frame processing at 30+ FPS
-        - Minimal latency between gesture and detection
-        - Smooth video streaming experience
-        - Browser-based accessibility
-        
-        **Network Efficiency:**
-        - Direct browser-to-server video streaming
-        - Optimized bandwidth usage
-        - Reliable connection handling
-        - Cross-platform compatibility
-        
-        ## 📋 System Requirements
-        
-        **Browser Support:**
-        - Chrome (recommended)
-        - Firefox
-        - Safari
-        - Edge
-        
-        **Hardware Requirements:**
-        - Webcam access
-        - Stable internet connection
-        - Modern CPU for real-time processing
-        
-        ## 🔧 Technical Implementation
-        
-        The application uses **streamlit-webrtc** component which:
-        - Establishes WebRTC connection between browser and server
-        - Streams video frames in real-time
-        - Processes each frame through MediaPipe and ML model
-        - Returns annotated video stream back to browser
-        - Maintains synchronized prediction display
-        """)
-        
-        # Display supported gestures
-        st.subheader("🔤 Supported Gesture Library")
-        gesture_categories = {
-            "Personal Pronouns": ['I', 'YOU'],
-            "Emotions": ['LOVE', 'HATE'],
-            "Status": ['OK', 'NOT OK', 'WIN', 'SUPER'],
-            "Actions": ['HELP', 'STOP', 'COME', 'GO'],
-            "Courtesy": ['THANK YOU', 'SORRY', 'PLEASE', 'WELCOME'],
-            "Responses": ['YES', 'NO'],
-            "Greetings": ['GOOD MORNING', 'GOODBYE']
-        }
-        
-        for category, gestures in gesture_categories.items():
-            st.write(f"**{category}:** {', '.join(gestures)}")
+    if ctx.video_transformer:
+        ctx.video_transformer.update_confidence(detection_confidence)
+        st.sidebar.write("Prediction:", ctx.video_transformer.current_prediction)
 
 if __name__ == "__main__":
     main()
