@@ -131,7 +131,7 @@ def main():
             prediction_placeholder = st.empty()
             
             # Initialize webcam
-            cap = cv2.VideoCapture(0)
+            cap = cv2.VideoCapture(1)
             
             if not cap.isOpened():
                 st.error("Could not open webcam. Please check your camera permissions.")
@@ -231,3 +231,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
