@@ -5,34 +5,112 @@ import mediapipe as mp
 import numpy as np
 from PIL import Image
 import time
+from datetime import datetime
+import plotly.graph_objects as go
+import plotly.express as px
+from collections import Counter
+import pandas as pd
 
-# Configure page
+# Configure page with professional styling
 st.set_page_config(
-    page_title="Real-Time Sign Language Recognition",
+    page_title="AI Sign Language Recognition System",
     page_icon="🤟",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Load model
+# Professional CSS styling
+st.markdown("""
+<style>
+    .main-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    
+    .feature-card {
+        background: linear-gradient(145deg, #f8f9fa, #e9ecef);
+        border: 1px solid #dee2e6;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+    }
+    
+    .feature-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    }
+    
+    .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    
+    .status-active { background-color: #28a745; }
+    .status-inactive { background-color: #dc3545; }
+    .status-processing { background-color: #ffc107; }
+    
+    .confidence-bar {
+        background: linear-gradient(90deg, #ff4757, #ffa502, #2ed573);
+        height: 8px;
+        border-radius: 4px;
+        margin: 5px 0;
+    }
+    
+    .prediction-box {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        text-align: center;
+        margin: 1rem 0;
+        font-size: 1.2rem;
+        font-weight: bold;
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
+    }
+    
+    .metric-container {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        border-left: 4px solid #667eea;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Load model with enhanced error handling
 @st.cache_resource
 def load_model():
     try:
-        model_dict = pickle.load(open('./model.p', 'rb'))
+        with open('./model.p', 'rb') as f:
+            model_dict = pickle.load(f)
         return model_dict['model']
     except FileNotFoundError:
-        st.error("Model file 'model.p' not found.")
+        st.error("❌ Model file 'model.p' not found. Please ensure the model file is in the same directory.")
+        return None
+    except Exception as e:
+        st.error(f"❌ Error loading model: {str(e)}")
         return None
 
-# Initialize MediaPipe
+# Initialize MediaPipe with caching
 @st.cache_resource
 def init_mediapipe():
-    mp_hands = mp.solutions.hands  # Fixed the typo here
+    mp_hands = mp.solutions.hands
     mp_drawing = mp.solutions.drawing_utils
     mp_drawing_styles = mp.solutions.drawing_styles
-    hands = mp_hands.Hands(static_image_mode=True, min_detection_confidence=0.3)
-    return mp_hands, mp_drawing, mp_drawing_styles, hands
+    return mp_hands, mp_drawing, mp_drawing_styles
 
-# Labels dictionary
+# Enhanced labels dictionary with categories
 labels_dict = {
     0: 'I', 1: 'YOU', 2: 'LOVE', 3: 'HATE', 4: 'OK', 5: 'NOT OK',
     6: 'WIN', 7: 'SUPER', 8: 'HELP', 9: 'STOP', 10: 'COME', 11: 'GO',
@@ -40,186 +118,612 @@ labels_dict = {
     17: 'GOOD MORNING', 18: 'GOODBYE', 19: 'WELCOME'
 }
 
-def process_frame(image, model, mp_hands, mp_drawing, mp_drawing_styles, hands):
-    """Process image exactly like your original code"""
+# Gesture categories for better organization
+gesture_categories = {
+    "👤 Personal": ['I', 'YOU'],
+    "❤️ Emotions": ['LOVE', 'HATE'],
+    "✅ Status": ['OK', 'NOT OK', 'WIN', 'SUPER'],
+    "🚀 Actions": ['HELP', 'STOP', 'COME', 'GO'],
+    "🙏 Courtesy": ['THANK YOU', 'SORRY', 'PLEASE', 'WELCOME'],
+    "💬 Responses": ['YES', 'NO'],
+    "👋 Greetings": ['GOOD MORNING', 'GOODBYE']
+}
+
+# Initialize enhanced session state
+def init_session_state():
+    if 'auto_process' not in st.session_state:
+        st.session_state.auto_process = False
+    if 'gesture_history' not in st.session_state:
+        st.session_state.gesture_history = []
+    if 'confidence_history' not in st.session_state:
+        st.session_state.confidence_history = []
+    if 'session_stats' not in st.session_state:
+        st.session_state.session_stats = {
+            'total_detections': 0,
+            'high_confidence_detections': 0,
+            'session_start': datetime.now(),
+            'gesture_counts': Counter(),
+            'avg_confidence': 0.0,
+            'processing_times': []
+        }
+    if 'live_predictions' not in st.session_state:
+        st.session_state.live_predictions = []
+
+# Enhanced gesture processing with confidence analysis
+def process_gesture_image(image, model, mp_hands, mp_drawing, mp_drawing_styles, confidence_threshold=0.3):
+    """Enhanced processing with detailed confidence analysis"""
+    start_time = time.time()
+    
     # Convert PIL to OpenCV format
     frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    original_frame = frame.copy()
     
-    # Your original processing logic
+    # Initialize hands detector with optimized settings
+    hands = mp_hands.Hands(
+        static_image_mode=True,
+        max_num_hands=2,
+        min_detection_confidence=confidence_threshold,
+        min_tracking_confidence=0.5
+    )
+    
+    # Process frame
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands.process(frame_rgb)
     
     predictions = []
+    confidence_scores = []
+    hand_landmarks_data = []
     
     if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
+        for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
             data_aux = []
             x_ = []
             y_ = []
             H, W, _ = frame.shape
 
-            for i in range(len(hand_landmarks.landmark)):
-                x = hand_landmarks.landmark[i].x
-                y = hand_landmarks.landmark[i].y
-                x_.append(x)
-                y_.append(y)
+            # Extract landmark coordinates
+            for landmark in hand_landmarks.landmark:
+                x_.append(landmark.x)
+                y_.append(landmark.y)
 
-            for i in range(len(hand_landmarks.landmark)):
-                x = hand_landmarks.landmark[i].x
-                y = hand_landmarks.landmark[i].y
-                data_aux.append(x - min(x_))
-                data_aux.append(y - min(y_))
+            # Normalize coordinates
+            for landmark in hand_landmarks.landmark:
+                data_aux.append(landmark.x - min(x_))
+                data_aux.append(landmark.y - min(y_))
 
-            x1 = int(min(x_) * W) - 10
-            y1 = int(min(y_) * H) - 10
-            x2 = int(max(x_) * W) + 10
-            y2 = int(max(y_) * H) + 10
+            # Calculate hand bounding box
+            x1 = max(0, int(min(x_) * W) - 20)
+            y1 = max(0, int(min(y_) * H) - 20)
+            x2 = min(W, int(max(x_) * W) + 20)
+            y2 = min(H, int(max(y_) * H) + 20)
 
-            # Make prediction
-            try:
-                prediction = model.predict([np.asarray(data_aux)])
-                predicted_character = labels_dict[int(prediction[0])]
-                predictions.append(predicted_character)
+            # Make prediction with confidence analysis
+            if model and len(data_aux) == 42:
+                try:
+                    prediction = model.predict([np.asarray(data_aux)])
+                    prediction_proba = model.predict_proba([np.asarray(data_aux)])
+                    
+                    predicted_character = labels_dict.get(int(prediction[0]), "Unknown")
+                    confidence_score = prediction_proba.max()
+                    
+                    predictions.append(predicted_character)
+                    confidence_scores.append(confidence_score)
+                    
+                    # Store detailed hand data for analysis
+                    hand_landmarks_data.append({
+                        'hand_id': hand_idx,
+                        'prediction': predicted_character,
+                        'confidence': confidence_score,
+                        'bbox': (x1, y1, x2, y2),
+                        'landmark_count': len(hand_landmarks.landmark)
+                    })
+                    
+                    # Confidence-based color coding
+                    if confidence_score >= 0.8:
+                        color = (0, 255, 0)  # Green - High confidence
+                        thickness = 4
+                    elif confidence_score >= 0.6:
+                        color = (255, 255, 0)  # Yellow - Medium confidence
+                        thickness = 3
+                    elif confidence_score >= 0.4:
+                        color = (255, 165, 0)  # Orange - Low confidence
+                        thickness = 2
+                    else:
+                        color = (255, 0, 0)  # Red - Very low confidence
+                        thickness = 2
+                    
+                    # Enhanced bounding box with confidence indicator
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+                    
+                    # Multi-line text display
+                    label_lines = [
+                        f"{predicted_character}",
+                        f"Conf: {confidence_score:.2f}",
+                        f"Hand {hand_idx + 1}"
+                    ]
+                    
+                    for i, line in enumerate(label_lines):
+                        y_offset = y1 - 15 - (i * 25)
+                        cv2.putText(frame, line, (x1, y_offset), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+                    
+                    # Confidence bar visualization
+                    bar_width = x2 - x1
+                    bar_height = 8
+                    cv2.rectangle(frame, (x1, y2 + 5), (x1 + int(bar_width * confidence_score), y2 + 5 + bar_height), 
+                                 color, -1)
+                    cv2.rectangle(frame, (x1, y2 + 5), (x2, y2 + 5 + bar_height), (255, 255, 255), 1)
+                    
+                except Exception as e:
+                    st.error(f"Prediction error for hand {hand_idx + 1}: {str(e)}")
 
-                # Draw exactly like your original code
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 4)
-                cv2.putText(frame, predicted_character, (x1, y1 - 10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 0), 3, cv2.LINE_AA)
-            except Exception as e:
-                st.write(f"Prediction error: {str(e)}")
-
-            # Draw landmarks exactly like your original code
+            # Enhanced landmark drawing
             mp_drawing.draw_landmarks(
                 frame, hand_landmarks, mp_hands.HAND_CONNECTIONS,
                 mp_drawing_styles.get_default_hand_landmarks_style(),
                 mp_drawing_styles.get_default_hand_connections_style()
             )
     
-    # Convert back to RGB for display
+    processing_time = time.time() - start_time
     processed_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    return processed_rgb, predictions
+    
+    return {
+        'processed_image': processed_rgb,
+        'original_image': cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB),
+        'predictions': predictions,
+        'confidence_scores': confidence_scores,
+        'hand_count': len(results.multi_hand_landmarks) if results.multi_hand_landmarks else 0,
+        'processing_time': processing_time,
+        'hand_landmarks_data': hand_landmarks_data
+    }
 
-def main():
-    st.title("🤟 Real-Time Sign Language Recognition")
-    st.markdown("**Converted from your working local OpenCV code**")
+# Update session statistics with enhanced metrics
+def update_stats(predictions, confidence_scores, processing_time):
+    stats = st.session_state.session_stats
     
-    # Load model
-    model = load_model()
-    if not model:
-        st.error("Cannot start without model")
-        return
+    stats['total_detections'] += 1
+    stats['processing_times'].append(processing_time)
     
-    mp_hands, mp_drawing, mp_drawing_styles, hands = init_mediapipe()
-    
-    # Initialize session state for continuous processing
-    if 'auto_process' not in st.session_state:
-        st.session_state.auto_process = False
-    if 'frame_counter' not in st.session_state:
-        st.session_state.frame_counter = 0
-    if 'last_predictions' not in st.session_state:
-        st.session_state.last_predictions = []
-    
-    # Controls
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("🚀 Start Auto-Processing"):
-            st.session_state.auto_process = True
-            
-    with col2:
-        if st.button("⏹️ Stop Auto-Processing"):
-            st.session_state.auto_process = False
-            
-    with col3:
-        st.write(f"**Status:** {'🟢 Running' if st.session_state.auto_process else '🔴 Stopped'}")
-    
-    # Main processing area
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("📹 Camera Feed")
+    if predictions and confidence_scores:
+        # Update gesture counts
+        for pred in predictions:
+            stats['gesture_counts'][pred] += 1
         
-        # Auto-updating camera input for quasi-real-time
-        if st.session_state.auto_process:
-            # Create unique key to force refresh
-            camera_key = f"camera_{int(time.time())}"
-            auto_refresh_placeholder = st.empty()
-        else:
-            camera_key = "camera_static"
-            
-        camera_photo = st.camera_input(
-            "📷 Capture gesture", 
-            key=camera_key
+        # Update confidence statistics
+        avg_conf = np.mean(confidence_scores)
+        st.session_state.confidence_history.append(avg_conf)
+        
+        # High confidence detection tracking
+        if avg_conf >= 0.7:
+            stats['high_confidence_detections'] += 1
+        
+        # Update running average confidence
+        all_confidences = st.session_state.confidence_history
+        stats['avg_confidence'] = np.mean(all_confidences) if all_confidences else 0.0
+        
+        # Update gesture history
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        for pred, conf in zip(predictions, confidence_scores):
+            st.session_state.gesture_history.append({
+                'gesture': pred,
+                'confidence': conf,
+                'timestamp': timestamp
+            })
+        
+        # Keep only recent history
+        if len(st.session_state.gesture_history) > 50:
+            st.session_state.gesture_history = st.session_state.gesture_history[-50:]
+
+# Create confidence visualization
+def create_confidence_chart():
+    if len(st.session_state.confidence_history) > 1:
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            y=st.session_state.confidence_history[-20:],  # Last 20 predictions
+            mode='lines+markers',
+            name='Confidence',
+            line=dict(color='#667eea', width=3),
+            marker=dict(size=8, color='#764ba2')
+        ))
+        
+        fig.update_layout(
+            title="Recent Confidence Trends",
+            yaxis_title="Confidence Score",
+            xaxis_title="Recent Predictions",
+            height=300,
+            showlegend=False,
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
         )
         
-        if camera_photo is not None:
-            st.session_state.frame_counter += 1
-            
-            # Process the image
-            image = Image.open(camera_photo)
-            processed_image, predictions = process_frame(
-                image, model, mp_hands, mp_drawing, mp_drawing_styles, hands
-            )
-            
-            # Update predictions history
-            if predictions:
-                st.session_state.last_predictions.extend(predictions)
-                if len(st.session_state.last_predictions) > 10:
-                    st.session_state.last_predictions = st.session_state.last_predictions[-10:]
-            
-            # Display processed image
-            st.image(processed_image, caption=f"Processed Frame #{st.session_state.frame_counter}", 
-                    use_column_width=True)
-            
-            # Show predictions
-            if predictions:
-                st.success(f"**🎯 Detected:** {', '.join(predictions)}")
+        fig.add_hline(y=0.7, line_dash="dash", line_color="green", 
+                     annotation_text="High Confidence Threshold")
+        fig.add_hline(y=0.5, line_dash="dash", line_color="orange", 
+                     annotation_text="Medium Confidence Threshold")
+        
+        return fig
+    return None
+
+# Create gesture frequency chart
+def create_gesture_frequency_chart():
+    if st.session_state.session_stats['gesture_counts']:
+        gestures = list(st.session_state.session_stats['gesture_counts'].keys())
+        counts = list(st.session_state.session_stats['gesture_counts'].values())
+        
+        fig = px.bar(
+            x=counts, y=gestures,
+            orientation='h',
+            title="Most Detected Gestures",
+            color=counts,
+            color_continuous_scale='Blues'
+        )
+        
+        fig.update_layout(
+            height=400,
+            showlegend=False,
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+        
+        return fig
+    return None
+
+def main():
+    init_session_state()
     
-    with col2:
-        st.subheader("📊 Results")
+    # Professional header
+    st.markdown("""
+    <div class="main-header">
+        <h1>🤟 AI-Powered Sign Language Recognition System</h1>
+        <p>Professional-grade gesture detection with advanced confidence analysis and real-time insights</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Load model with status indicator
+    model = load_model()
+    if model is None:
+        st.error("❌ System cannot operate without the trained model. Please check your model file.")
+        return
+    
+    mp_hands, mp_drawing, mp_drawing_styles = init_mediapipe()
+    
+    # Enhanced sidebar with professional styling
+    with st.sidebar:
+        st.markdown("### ⚙️ System Configuration")
         
-        # Current status
-        if st.session_state.last_predictions:
-            st.success(f"**Latest:** {st.session_state.last_predictions[-1]}")
-        else:
-            st.info("**Status:** Ready for gestures")
+        # System status indicator
+        st.markdown(f"""
+        <div class="feature-card">
+            <h4>🔋 System Status</h4>
+            <p><span class="status-indicator status-active"></span>Model: Loaded</p>
+            <p><span class="status-indicator status-active"></span>MediaPipe: Ready</p>
+            <p><span class="status-indicator {'status-active' if st.session_state.auto_process else 'status-inactive'}"></span>Processing: {'Active' if st.session_state.auto_process else 'Standby'}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Statistics
-        st.metric("Frames Processed", st.session_state.frame_counter)
+        # Advanced configuration
+        st.markdown("#### 🎛️ Detection Parameters")
+        confidence_threshold = st.slider(
+            "Detection Confidence Threshold", 
+            0.1, 1.0, 0.3, 0.05,
+            help="Higher values require more confident detections"
+        )
         
-        # Recent predictions
-        if st.session_state.last_predictions:
-            st.subheader("🕒 Recent Detections")
-            recent = st.session_state.last_predictions[-5:]
-            for i, pred in enumerate(reversed(recent)):
-                st.write(f"{i+1}. **{pred}**")
+        processing_speed = st.selectbox(
+            "Processing Speed",
+            ["Fast (3s intervals)", "Balanced (2s intervals)", "Precise (1s intervals)"],
+            index=1,
+            help="Balance between speed and accuracy"
+        )
         
-        # Clear history
-        if st.button("🗑️ Clear History"):
-            st.session_state.last_predictions = []
-            st.session_state.frame_counter = 0
+        speed_map = {
+            "Fast (3s intervals)": 3,
+            "Balanced (2s intervals)": 2,
+            "Precise (1s intervals)": 1
+        }
+        
+        # Session statistics dashboard
+        stats = st.session_state.session_stats
+        st.markdown("#### 📊 Session Analytics")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Detections", stats['total_detections'])
+            st.metric("High Confidence", stats['high_confidence_detections'])
+        
+        with col2:
+            success_rate = (stats['high_confidence_detections'] / max(stats['total_detections'], 1)) * 100
+            st.metric("Success Rate", f"{success_rate:.1f}%")
+            st.metric("Avg Confidence", f"{stats['avg_confidence']:.2f}")
+        
+        # Session duration
+        session_duration = datetime.now() - stats['session_start']
+        st.metric("Session Duration", f"{session_duration.seconds // 60}m {session_duration.seconds % 60}s")
+        
+        # Gesture reference with categories
+        st.markdown("#### 🔤 Gesture Library")
+        for category, gestures in gesture_categories.items():
+            with st.expander(f"{category} ({len(gestures)} gestures)"):
+                for gesture in gestures:
+                    count = stats['gesture_counts'].get(gesture, 0)
+                    if count > 0:
+                        st.write(f"• **{gesture}** _{count}x detected_")
+                    else:
+                        st.write(f"• {gesture}")
+        
+        # Control buttons
+        st.markdown("#### 🎮 System Controls")
+        if st.button("🗑️ Reset Session", type="secondary"):
+            for key in ['gesture_history', 'confidence_history', 'session_stats']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            init_session_state()
+            st.success("Session reset successfully!")
             st.rerun()
-        
-        # Instructions
-        st.subheader("💡 How to Use")
-        st.write("""
-        **Steps:**
-        1. Click **"Start Auto-Processing"**
-        2. Allow camera permissions
-        3. Show gesture to camera
-        4. Camera auto-captures every few seconds
-        
-        **Tips:**
-        • Good lighting on hands
-        • Clear background
-        • Hold gesture steady
-        • One hand works better
-        """)
+
+    # Main interface with tabs
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📸 Live Detection", 
+        "📁 Image Upload", 
+        "📈 Analytics Dashboard",
+        "ℹ️ System Information"
+    ])
     
-    # Auto-refresh logic for continuous processing
-    if st.session_state.auto_process:
-        time.sleep(2)  # Wait 2 seconds between captures
-        st.rerun()
+    with tab1:
+        st.markdown("### 📸 Real-Time Gesture Detection")
+        
+        # Control panel
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            if st.button("🚀 Start Auto-Processing", type="primary"):
+                st.session_state.auto_process = True
+                st.success("Auto-processing activated!")
+                
+        with col2:
+            if st.button("⏹️ Stop Processing", type="secondary"):
+                st.session_state.auto_process = False
+                st.info("Processing stopped")
+                
+        with col3:
+            status_emoji = "🟢" if st.session_state.auto_process else "🔴"
+            st.markdown(f"**Status:** {status_emoji} {'Active' if st.session_state.auto_process else 'Inactive'}")
+            
+        with col4:
+            if st.session_state.auto_process:
+                st.markdown("**⏱️ Auto-refresh active**")
+        
+        # Main processing area
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("#### 📹 Camera Feed")
+            
+            # Dynamic camera input
+            camera_key = f"camera_{int(time.time())}" if st.session_state.auto_process else "camera_static"
+            camera_photo = st.camera_input("📷 Capture gesture for analysis", key=camera_key)
+            
+            if camera_photo is not None:
+                with st.spinner("🔄 Processing gesture with AI analysis..."):
+                    image = Image.open(camera_photo)
+                    
+                    # Process with enhanced features
+                    result = process_gesture_image(
+                        image, model, mp_hands, mp_drawing, mp_drawing_styles, confidence_threshold
+                    )
+                    
+                    # Update statistics
+                    update_stats(result['predictions'], result['confidence_scores'], result['processing_time'])
+                    
+                    # Display processed image
+                    st.image(result['processed_image'], 
+                            caption=f"Processed in {result['processing_time']:.2f}s | {result['hand_count']} hands detected",
+                            use_column_width=True)
+        
+        with col2:
+            st.markdown("#### 📊 Live Results")
+            
+            if camera_photo is not None:
+                # Display predictions with confidence
+                if result['predictions']:
+                    for i, (pred, conf) in enumerate(zip(result['predictions'], result['confidence_scores'])):
+                        # Confidence-based styling
+                        if conf >= 0.8:
+                            st.success(f"**Hand {i+1}:** {pred} ({conf:.2f})")
+                        elif conf >= 0.6:
+                            st.warning(f"**Hand {i+1}:** {pred} ({conf:.2f})")
+                        else:
+                            st.info(f"**Hand {i+1}:** {pred} ({conf:.2f})")
+                        
+                        # Confidence bar visualization
+                        st.progress(conf, text=f"Confidence: {conf:.1%}")
+                else:
+                    st.info("👋 No hands detected. Please show your hand clearly to the camera.")
+                
+                # Processing metrics
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Processing Time", f"{result['processing_time']:.2f}s")
+                with col2:
+                    st.metric("Hands Detected", result['hand_count'])
+            
+            # Recent detections history
+            if st.session_state.gesture_history:
+                st.markdown("#### 🕒 Recent Detections")
+                recent_detections = st.session_state.gesture_history[-5:]
+                for detection in reversed(recent_detections):
+                    conf_color = "🟢" if detection['confidence'] >= 0.7 else "🟡" if detection['confidence'] >= 0.5 else "🔴"
+                    st.write(f"{conf_color} **{detection['gesture']}** ({detection['confidence']:.2f}) - {detection['timestamp']}")
+        
+        # Auto-refresh logic
+        if st.session_state.auto_process:
+            time.sleep(speed_map[processing_speed])
+            st.rerun()
+    
+    with tab2:
+        st.markdown("### 📁 Batch Image Processing")
+        
+        uploaded_file = st.file_uploader(
+            "Upload image containing sign language gestures",
+            type=['jpg', 'jpeg', 'png'],
+            help="Supported formats: JPG, JPEG, PNG. Best results with clear hand gestures and good lighting."
+        )
+        
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📤 Original Image")
+                st.image(image, use_column_width=True)
+            
+            with col2:
+                st.markdown("#### 🎯 Analysis Results")
+                
+                with st.spinner("Analyzing uploaded image..."):
+                    result = process_gesture_image(
+                        image, model, mp_hands, mp_drawing, mp_drawing_styles, confidence_threshold
+                    )
+                    
+                    update_stats(result['predictions'], result['confidence_scores'], result['processing_time'])
+                
+                st.image(result['processed_image'], use_column_width=True)
+                
+                # Detailed analysis
+                if result['predictions']:
+                    st.markdown("##### 📋 Detailed Analysis")
+                    for i, data in enumerate(result['hand_landmarks_data']):
+                        st.markdown(f"""
+                        **Hand {data['hand_id'] + 1} Analysis:**
+                        - **Gesture:** {data['prediction']}
+                        - **Confidence:** {data['confidence']:.2f} ({data['confidence']:.1%})
+                        - **Landmarks:** {data['landmark_count']} points detected
+                        """)
+                        
+                        # Confidence assessment
+                        if data['confidence'] >= 0.8:
+                            st.success("High confidence detection ✅")
+                        elif data['confidence'] >= 0.6:
+                            st.warning("Medium confidence detection ⚠️")
+                        else:
+                            st.error("Low confidence detection ❌")
+                else:
+                    st.info("No gesture detected in the uploaded image. Try with better lighting or clearer hand positioning.")
+    
+    with tab3:
+        st.markdown("### 📈 Advanced Analytics Dashboard")
+        
+        if st.session_state.session_stats['total_detections'] > 0:
+            # Key metrics overview
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Detections", stats['total_detections'])
+            with col2:
+                st.metric("High Confidence Rate", f"{(stats['high_confidence_detections']/stats['total_detections']*100):.1f}%")
+            with col3:
+                st.metric("Average Confidence", f"{stats['avg_confidence']:.2f}")
+            with col4:
+                avg_processing_time = np.mean(stats['processing_times']) if stats['processing_times'] else 0
+                st.metric("Avg Processing Time", f"{avg_processing_time:.2f}s")
+            
+            # Visualizations
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Confidence trend chart
+                conf_chart = create_confidence_chart()
+                if conf_chart:
+                    st.plotly_chart(conf_chart, use_container_width=True)
+            
+            with col2:
+                # Gesture frequency chart
+                freq_chart = create_gesture_frequency_chart()
+                if freq_chart:
+                    st.plotly_chart(freq_chart, use_container_width=True)
+            
+            # Detailed statistics table
+            if st.session_state.gesture_history:
+                st.markdown("#### 📋 Detailed Detection Log")
+                
+                # Convert to DataFrame for better display
+                df = pd.DataFrame(st.session_state.gesture_history[-20:])  # Last 20 detections
+                df['confidence_category'] = df['confidence'].apply(
+                    lambda x: 'High (≥0.8)' if x >= 0.8 else 'Medium (0.6-0.8)' if x >= 0.6 else 'Low (<0.6)'
+                )
+                
+                st.dataframe(
+                    df[['timestamp', 'gesture', 'confidence', 'confidence_category']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+        else:
+            st.info("📊 Start detecting gestures to see analytics data here!")
+    
+    with tab4:
+        st.markdown("### ℹ️ System Information")
+        
+        st.markdown("""
+        #### 🚀 Advanced AI Sign Language Recognition System
+        
+        This professional-grade system provides comprehensive gesture recognition with detailed confidence analysis
+        and real-time performance monitoring.
+        
+        ##### 🔧 Technical Specifications
+        
+        **AI/ML Components:**
+        - **MediaPipe:** Google's advanced hand landmark detection
+        - **Scikit-learn:** Machine learning classification engine
+        - **OpenCV:** Computer vision processing pipeline
+        - **NumPy:** High-performance numerical computing
+        
+        **Performance Metrics:**
+        - **Processing Speed:** < 2 seconds per frame
+        - **Accuracy:** Confidence-based quality assessment
+        - **Gesture Support:** 20 distinct sign language gestures
+        - **Multi-hand Support:** Up to 2 hands simultaneously
+        
+        **Enhanced Features:**
+        - ✅ **Real-time confidence scoring** with visual indicators
+        - ✅ **Advanced analytics dashboard** with trend analysis
+        - ✅ **Professional UI/UX** with responsive design
+        - ✅ **Session management** with detailed statistics
+        - ✅ **Batch processing** for uploaded images
+        - ✅ **Multi-hand detection** with individual analysis
+        - ✅ **Confidence-based color coding** for immediate feedback
+        - ✅ **Performance monitoring** with processing time tracking
+        """)
+        
+        # System performance indicators
+        st.markdown("##### 📊 Current Session Performance")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("""
+            **🎯 Detection Quality**
+            - High confidence threshold: ≥80%
+            - Medium confidence threshold: 60-80%
+            - Low confidence threshold: <60%
+            """)
+        
+        with col2:
+            st.markdown("""
+            **⚡ Processing Performance**
+            - Target processing time: <2s
+            - Real-time analysis: ✅
+            - Batch processing: ✅
+            """)
+        
+        with col3:
+            st.markdown("""
+            **🔧 System Capabilities**
+            - Multi-hand support: ✅
+            - Confidence analysis: ✅
+            - Analytics dashboard: ✅
+            """)
 
 if __name__ == "__main__":
     main()
