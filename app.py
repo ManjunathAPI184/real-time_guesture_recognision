@@ -1,27 +1,13 @@
-import cv2
+import streamlit as st
+from PIL import Image
+import io
 
-# Open the webcam (0 = default camera)
-cap = cv2.VideoCapture(0)
+st.title("Live Webcam Capture in Streamlit Cloud")
 
-# Check if webcam is opened
-if not cap.isOpened():
-    print("Error: Could not open webcam.")
-    exit()
+# Capture from webcam
+img_data = st.camera_input("Take a picture")
 
-while True:
-    # Capture frame-by-frame
-    ret, frame = cap.read()
-    if not ret:
-        print("Failed to grab frame.")
-        break
-
-    # Show the live frame
-    cv2.imshow("Live Webcam Feed", frame)
-
-    # Exit when 'q' is pressed
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-# Release resources
-cap.release()
-cv2.destroyAllWindows()
+if img_data:
+    # Convert to PIL image
+    image = Image.open(io.BytesIO(img_data.getvalue()))
+    st.image(image, caption="Captured Image", use_container_width=True)
